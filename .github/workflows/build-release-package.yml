@@ -35,13 +35,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
+            python3 \
             ruby \
             ruby-dev \
             rubygems \
             rpm \
             debhelper \
             devscripts \
-            git
+            git \
+            libhunspell-dev \
+            hunspell
 
       - name: Install fpm for package building
         run: |
