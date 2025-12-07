@@ -1,0 +1,171 @@
+name: Build and Release DEB Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_major:
+        description: 'Major version (e.g., 9.2.0)'
+        required: true
+        type: string
+      build_number:
+        description: 'Build number'
+        required: true
+        type: string
+
+jobs:
+  build-and-release:
+    name: Build and Release DEB Package
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            ruby \
+            ruby-dev \
+            rubygems \
+            rpm \
+            debhelper \
+            devscripts \
+            git
+
+      - name: Install fpm for package building
+        run: |
+          sudo gem install --no-document fpm
+
+      - name: Install npm dependencies
+        run: |
+          npm ci
+          npm --prefix Common ci
+          npm --prefix DocService ci
+          npm --prefix FileConverter ci
+          npm --prefix Metrics ci
+          npm --prefix AdminPanel/server ci
+          npm ci --include=dev --prefix AdminPanel/client
+
+      - name: Build AdminPanel client
+        run: |
+          npm --prefix AdminPanel/client run build
+
+      - name: Run Grunt build
+        env:
+          PRODUCT_VERSION: ${{ inputs.version_major }}
+          BUILD_NUMBER: ${{ inputs.build_number }}
+        run: |
+          npm install -g grunt-cli
+          grunt --no-color -v
+
+      - name: Prepare build directory
+        env:
+          PRODUCT_VERSION: ${{ inputs.version_major }}
+          BUILD_NUMBER: ${{ inputs.build_number }}
+        run: |
+          mkdir -p build/server
+          cp -r Common DocService FileConverter Metrics SpellChecker AdminPanel build/server/
+
+          # Copy built files
+          if [ -f "Gruntfile.js.out" ]; then
+            echo "Grunt build completed"
+          fi
+
+      - name: Create .deb package
+        env:
+          PRODUCT_VERSION: ${{ inputs.version_major }}
+          BUILD_NUMBER: ${{ inputs.build_number }}
+        run: |
+          # Prepare package structure
+          mkdir -p package/var/www/onlyoffice/documentserver/server
+          mkdir -p package/etc/onlyoffice/documentserver
+          mkdir -p package/var/log/onlyoffice/documentserver
+          mkdir -p package/var/lib/onlyoffice/documentserver/App_Data
+
+          # Copy server files
+          cp -r Common package/var/www/onlyoffice/documentserver/server/
+          cp -r DocService package/var/www/onlyoffice/documentserver/server/
+          cp -r FileConverter package/var/www/onlyoffice/documentserver/server/
+          cp -r Metrics package/var/www/onlyoffice/documentserver/server/
+          cp -r SpellChecker package/var/www/onlyoffice/documentserver/server/
+          cp -r AdminPanel package/var/www/onlyoffice/documentserver/server/
+
+          # Copy schema
+          cp -r schema package/var/www/onlyoffice/documentserver/server/
+
+          # Copy license files
+          cp LICENSE.txt package/var/www/onlyoffice/documentserver/server/ || true
+          cp 3rd-Party.txt package/var/www/onlyoffice/documentserver/server/ || true
+
+          # Create post-install script
+          cat > package/post-install.sh << 'EOF'
+          #!/bin/bash
+          if ! id -u onlyoffice > /dev/null 2>&1; then
+            useradd -m -d /var/www/onlyoffice -r -U onlyoffice
+          fi
+          chown -R onlyoffice:onlyoffice /var/www/onlyoffice
+          chown -R onlyoffice:onlyoffice /var/log/onlyoffice
+          chown -R onlyoffice:onlyoffice /var/lib/onlyoffice
+          EOF
+          chmod +x package/post-install.sh
+
+          # Build the .deb package
+          fpm -s dir -t deb \
+            -n onlyoffice-documentserver \
+            -v "${PRODUCT_VERSION}-${BUILD_NUMBER}.oou" \
+            -a amd64 \
+            --description "ONLYOFFICE Document Server" \
+            --url "https://www.onlyoffice.com/" \
+            --license "AGPL-3.0" \
+            --vendor "Ascensio System SIA" \
+            --maintainer "Ascensio System SIA" \
+            --after-install package/post-install.sh \
+            --depends "nodejs >= 18.0.0" \
+            --depends "postgresql | mysql-server" \
+            --depends "rabbitmq-server" \
+            --depends "redis-server" \
+            -C package \
+            var etc
+
+          # Rename to match expected format
+          mv onlyoffice-documentserver_${PRODUCT_VERSION}-${BUILD_NUMBER}.oou_amd64.deb \
+             onlyoffice-documentserver_${PRODUCT_VERSION}-${BUILD_NUMBER}.oou_amd64.deb || true
+
+          ls -lh *.deb
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ inputs.version_major }}.${{ inputs.build_number }}
+          release_name: Release ${{ inputs.version_major }}.${{ inputs.build_number }}
+          draft: false
+          prerelease: false
+
+      - name: Upload DEB package to Release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./onlyoffice-documentserver_${{ inputs.version_major }}-${{ inputs.build_number }}.oou_amd64.deb
+          asset_name: onlyoffice-documentserver_${{ inputs.version_major }}-${{ inputs.build_number }}.oou_amd64.deb
+          asset_content_type: application/vnd.debian.binary-package
+
+      - name: Output download URL
+        run: |
+          echo "Package is available at:"
+          echo "https://github.com/${{ github.repository }}/releases/download/${{ inputs.version_major }}.${{ inputs.build_number }}/onlyoffice-documentserver_${{ inputs.version_major }}-${{ inputs.build_number }}.oou_amd64.deb"
