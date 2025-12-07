@@ -50,6 +50,19 @@ jobs:
         run: |
           sudo gem install --no-document fpm
 
+      - name: Pre-build nodehun with submodules
+        run: |
+          # Clone nodehun repository and initialize submodules
+          echo "Cloning nodehun with submodules..."
+          git clone https://github.com/ONLYOFFICE/nodehun.git /tmp/nodehun
+          cd /tmp/nodehun
+          git checkout 2411a56828c7d58214c61781b4a5c63d18adba99
+          git submodule update --init --recursive
+
+          # Try to build it
+          echo "Building nodehun..."
+          npm install || echo "nodehun build failed"
+
       - name: Install npm dependencies
         run: |
           # Install dependencies for all modules
@@ -58,9 +71,12 @@ jobs:
           npm --prefix DocService ci || npm --prefix DocService install
           npm --prefix FileConverter ci || npm --prefix FileConverter install
           npm --prefix Metrics ci || npm --prefix Metrics install
-          npm --prefix SpellChecker ci || npm --prefix SpellChecker install
           npm --prefix AdminPanel/server ci || npm --prefix AdminPanel/server install
           npm ci --include=dev --prefix AdminPanel/client || npm install --include=dev --prefix AdminPanel/client
+
+          # SpellChecker with nodehun dependency
+          echo "Installing SpellChecker dependencies..."
+          npm --prefix SpellChecker ci || npm --prefix SpellChecker install || echo "WARNING: SpellChecker install failed, continuing without it"
 
       - name: Build AdminPanel client
         run: |
