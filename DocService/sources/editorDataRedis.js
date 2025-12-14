@@ -31,7 +31,9 @@ if (!isRedisConfigured) {
 
   const cfgRedisPrefix = cfgRedis.prefix;
   const cfgRedisOptions = cfgRedis.iooptions;
-  const cfgExpPresence = ms(config.get('services.CoAuthoring.expire.presence')) / 1000;
+  // presence config value is already in seconds (number), not a ms-format string
+  const cfgExpPresence = parseInt(config.get('services.CoAuthoring.expire.presence'), 10) || 300;
+  // monthUniqueUsers is a ms-format string like "1y"
   const cfgExpMonthUniqueUsers = ms(config.get('services.CoAuthoring.expire.monthUniqueUsers'));
 
   /**
@@ -53,7 +55,8 @@ if (!isRedisConfigured) {
       options.password = redisOptions.password;
     }
     if (redisOptions.database !== undefined) {
-      options.db = redisOptions.database;
+      // Ensure database index is an integer (Docker entrypoint may pass it as string)
+      options.db = parseInt(redisOptions.database, 10) || 0;
     }
 
     return options;
@@ -170,6 +173,8 @@ if (!isRedisConfigured) {
   EditorCommon.prototype._checkAndLock = async function (ctx, name, docId, fencingToken, ttl) {
     await this.ensureConnected();
     const key = getDocKey(ctx, docId, name);
+    // Ensure ttl is an integer (callers may pass string or float)
+    const ttlSeconds = Math.max(1, Math.floor(parseInt(ttl, 10) || 60));
     
     // Try to get current lock value
     const current = await this.client.get(key);
@@ -182,7 +187,7 @@ if (!isRedisConfigured) {
     }
     
     // Set or refresh the lock
-    await this.client.set(key, fencingToken, 'EX', ttl);
+    await this.client.set(key, fencingToken, 'EX', ttlSeconds);
     return true;
   };
 
@@ -588,8 +593,10 @@ if (!isRedisConfigured) {
   EditorData.prototype.addForceSaveTimerNX = async function (ctx, docId, expireAt) {
     await this.ensureConnected();
     const key = getTenantKey(ctx, 'forceSaveTimer');
+    // Ensure expireAt is a valid number for the sorted set score
+    const score = parseFloat(expireAt) || Date.now();
     // ZADD NX - only add if not exists
-    await this.client.zadd(key, 'NX', expireAt, docId);
+    await this.client.zadd(key, 'NX', score, docId);
   };
 
   EditorData.prototype.getForceSaveTimer = async function (now) {
@@ -973,9 +980,11 @@ if (!isRedisConfigured) {
   EditorStat.prototype.lockNotification = async function (ctx, notificationType, ttl) {
     await this.ensureConnected();
     const key = getTenantKey(ctx, `notification:${notificationType}`);
+    // Ensure ttl is an integer
+    const ttlSeconds = Math.max(1, Math.floor(parseInt(ttl, 10) || 60));
     
     // Use SET NX EX for atomic lock acquisition
-    const result = await this.client.set(key, '1', 'EX', ttl, 'NX');
+    const result = await this.client.set(key, '1', 'EX', ttlSeconds, 'NX');
     return result === 'OK';
   };
 
