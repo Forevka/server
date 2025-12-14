@@ -5,55 +5,55 @@
 
 'use strict';
 
+const config = require('config');
 const logger = require('./../../Common/sources/logger');
 
-// Check for required environment variables
-const REDIS_SERVER_HOST = process.env.REDIS_SERVER_HOST;
-const REDIS_SERVER_PORT = process.env.REDIS_SERVER_PORT;
-const REDIS_SERVER_USER = process.env.REDIS_SERVER_USER;
-const REDIS_SERVER_PASS = process.env.REDIS_SERVER_PASS;
-const REDIS_SERVER_DB = parseInt(process.env.REDIS_SERVER_DB, 10) || 0;
+// Read Redis configuration from config file (populated by Docker entrypoint)
+const cfgRedis = config.get('services.CoAuthoring.redis');
+const redisHost = cfgRedis.host;
+const redisPort = cfgRedis.port;
 
-// If required environment variables are missing, fallback to memory implementation
-if (!REDIS_SERVER_HOST || !REDIS_SERVER_PORT) {
-  const missingVars = [];
-  if (!REDIS_SERVER_HOST) missingVars.push('REDIS_SERVER_HOST');
-  if (!REDIS_SERVER_PORT) missingVars.push('REDIS_SERVER_PORT');
-  
-  logger.warn('editorDataRedis: Missing required environment variables: %s. Falling back to memory implementation.', missingVars.join(', '));
+// Check if Redis is configured (not localhost = external Redis server)
+const isRedisConfigured = redisHost && redisHost !== 'localhost' && redisHost !== '127.0.0.1';
+
+if (!isRedisConfigured) {
+  logger.warn('editorDataRedis: Redis not configured (host=%s). Falling back to memory implementation.', redisHost || 'undefined');
   
   const editorDataMemory = require('./editorDataMemory');
   module.exports = editorDataMemory;
 } else {
   // Redis implementation
-  const config = require('config');
   const ms = require('ms');
   const Redis = require('ioredis');
   const utils = require('./../../Common/sources/utils');
   const commonDefines = require('./../../Common/sources/commondefines');
   const tenantManager = require('./../../Common/sources/tenantManager');
 
-  const cfgRedisPrefix = config.get('services.CoAuthoring.redis.prefix');
-  const cfgRedisOptions = config.get('services.CoAuthoring.redis.iooptions');
+  const cfgRedisPrefix = cfgRedis.prefix;
+  const cfgRedisOptions = cfgRedis.iooptions;
   const cfgExpPresence = ms(config.get('services.CoAuthoring.expire.presence')) / 1000;
   const cfgExpMonthUniqueUsers = ms(config.get('services.CoAuthoring.expire.monthUniqueUsers'));
 
   /**
-   * Build Redis connection options from environment variables
+   * Build Redis connection options from config
    */
   function buildRedisOptions() {
     const options = {
-      host: REDIS_SERVER_HOST,
-      port: parseInt(REDIS_SERVER_PORT, 10),
-      db: REDIS_SERVER_DB,
+      host: redisHost,
+      port: parseInt(redisPort, 10) || 6379,
       ...cfgRedisOptions
     };
 
-    if (REDIS_SERVER_USER) {
-      options.username = REDIS_SERVER_USER;
+    // Get optional auth settings from config
+    const redisOptions = cfgRedis.options || {};
+    if (redisOptions.username) {
+      options.username = redisOptions.username;
     }
-    if (REDIS_SERVER_PASS) {
-      options.password = REDIS_SERVER_PASS;
+    if (redisOptions.password) {
+      options.password = redisOptions.password;
+    }
+    if (redisOptions.database !== undefined) {
+      options.db = redisOptions.database;
     }
 
     return options;
@@ -107,7 +107,7 @@ if (!REDIS_SERVER_HOST || !REDIS_SERVER_PORT) {
       });
       
       this.client.on('connect', () => {
-        logger.info('editorDataRedis: Connected to Redis at %s:%s', REDIS_SERVER_HOST, REDIS_SERVER_PORT);
+        logger.info('editorDataRedis: Connected to Redis at %s:%s', redisHost, redisPort);
       });
 
       // If lazyConnect is enabled, we need to explicitly connect
