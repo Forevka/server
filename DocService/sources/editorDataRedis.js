@@ -574,7 +574,7 @@ if (!isRedisConfigured) {
     await this.ensureConnected();
     const keys = [
       getDocKey(ctx, docId, 'locks'),
-      getDocKey(ctx, docId, 'messages'),
+      getDocKey(ctx, docId, 'messages'), // TODO: maybe we need to preserve messages and not remove them on exit?
       getDocKey(ctx, docId, 'saved'),
       getDocKey(ctx, docId, 'forceSave'),
       getDocKey(ctx, docId, 'lockSave'),
